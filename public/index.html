@@ -32,7 +32,7 @@
   .card { background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
   h2 { font-size: 1.05rem; margin: 0 0 14px; }
   label { display: block; font-size: .85rem; color: var(--muted); margin: 14px 0 6px; }
-  input[type=text], input[type=password], input[type=number], textarea, select {
+  input[type=text], input[type=email], input[type=password], input[type=number], textarea, select {
     width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
     border-radius: 10px; padding: 10px 12px; font: inherit; font-size: .95rem;
   }
@@ -108,15 +108,75 @@
   #toast.show { transform: translateX(-50%) translateY(0); }
   #toast.error { border-color: var(--err); }
   footer { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 40px; }
+  /* ----- Auth ----- */
+  .auth-wrap { min-height: calc(100vh - 140px); display: grid; place-items: center; }
+  .auth-card { width: min(420px, 100%); }
+  .auth-card .brand { justify-content: center; margin-bottom: 6px; }
+  .auth-sub { text-align: center; color: var(--muted); margin: 0 0 18px; font-size: .92rem; }
+  .auth-links { display: flex; justify-content: space-between; margin-top: 14px; font-size: .85rem; }
+  .linkbtn { background: none; border: 0; padding: 0; color: #c4b5fd; font: inherit; cursor: pointer; text-decoration: underline; }
+  .msg { font-size: .85rem; margin-top: 12px; padding: 10px 12px; border-radius: 10px; }
+  .msg.ok { background: #22c55e1a; color: #86efac; border: 1px solid #22c55e44; }
+  .msg.err { background: #ef44441a; color: #fca5a5; border: 1px solid #ef444444; }
+  .user-pill { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #booting { text-align: center; color: var(--muted); padding: 80px 16px; }
 </style>
+<script src="vendor/supabase.js"></script>
 </head>
 <body>
 <div class="wrap">
+  <div id="booting">Loading…</div>
+
+  <!-- ===== Auth screen ===== -->
+  <div id="authView" class="auth-wrap hidden">
+    <section class="card auth-card" aria-labelledby="authTitle">
+      <div class="brand">🎵 <span>SongForge</span></div>
+      <p class="auth-sub" id="authTitle">Log in to start making music</p>
+
+      <div class="tabs" role="tablist" id="authTabs">
+        <button type="button" class="active" data-auth="login" role="tab" aria-selected="true">Log in</button>
+        <button type="button" data-auth="signup" role="tab" aria-selected="false">Sign up</button>
+      </div>
+
+      <form id="authForm" novalidate>
+        <label for="authEmail">Email</label>
+        <input type="email" id="authEmail" autocomplete="email" required placeholder="you@example.com">
+        <div id="pwBlock">
+          <label for="authPassword">Password</label>
+          <input type="password" id="authPassword" autocomplete="current-password" minlength="6" required placeholder="At least 6 characters">
+        </div>
+        <button type="submit" class="btn btn-primary" id="authSubmit">Log in</button>
+      </form>
+      <div class="auth-links">
+        <button type="button" class="linkbtn" id="forgotBtn">Forgot password?</button>
+        <button type="button" class="linkbtn hidden" id="backToLogin">Back to log in</button>
+      </div>
+      <div id="authMsg" class="msg hidden" role="status" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <!-- ===== Set new password (after reset link) ===== -->
+  <div id="resetView" class="auth-wrap hidden">
+    <section class="card auth-card" aria-labelledby="resetTitle">
+      <div class="brand">🎵 <span>SongForge</span></div>
+      <p class="auth-sub" id="resetTitle">Choose a new password</p>
+      <form id="resetForm" novalidate>
+        <label for="newPassword">New password</label>
+        <input type="password" id="newPassword" autocomplete="new-password" minlength="6" required placeholder="At least 6 characters">
+        <button type="submit" class="btn btn-primary" id="resetSubmit">Save new password</button>
+      </form>
+      <div id="resetMsg" class="msg hidden" role="status" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <div id="appView" class="hidden">
   <header>
     <div class="brand">🎵 <span>SongForge</span></div>
     <div class="head-actions">
       <div class="pill" id="creditsPill" title="Remaining Suno API credits">Credits: <b id="credits">—</b></div>
       <button class="btn btn-ghost btn-sm" id="keyBtn">🔑 API Key</button>
+      <div class="pill user-pill" id="userEmail" title=""></div>
+      <button class="btn btn-ghost btn-sm" id="signOutBtn">Log out</button>
     </div>
   </header>
 
@@ -217,6 +277,7 @@
     Powered by the <a href="https://docs.sunoapi.org" target="_blank" rel="noopener">Suno API</a>.
     Your API key is stored only in this browser and sent only to api.sunoapi.org.
   </footer>
+  </div><!-- /appView -->
 </div>
 
 <dialog id="keyDialog">
@@ -243,8 +304,12 @@
 (() => {
   "use strict";
   const API = "https://api.sunoapi.org/api/v1";
-  const KEY_STORE = "suno_api_key";
-  const LIB_STORE = "suno_library_v1";
+  // Supabase project (the publishable key is meant to be public; access is enforced by Supabase Auth).
+  const SUPABASE_URL = "https://fkrqlxerrxglyiwtfcnb.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_DNpWLOb4R5xAYRSM2J552g_c2u5ARlk";
+  // Per-user storage keys, set once someone logs in.
+  let KEY_STORE = "suno_api_key";
+  let LIB_STORE = "suno_library_v1";
   const POLL_MS = 5000;
   const MAX_POLL_MS = 10 * 60 * 1000;
   const FAIL_STATES = ["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "GENERATE_LYRICS_FAILED", "SENSITIVE_WORD_ERROR", "CALLBACK_EXCEPTION"];
@@ -277,7 +342,7 @@
   }
 
   // ---------- API key ----------
-  let apiKey = store.get(KEY_STORE, "");
+  let apiKey = "";
   const keyDialog = $("keyDialog");
   function openKeyDialog() {
     $("keyInput").value = apiKey;
@@ -490,7 +555,7 @@
   }
 
   // ---------- Library & polling ----------
-  let library = store.get(LIB_STORE, []);
+  let library = [];
   const polling = new Set();
   const saveLibrary = () => store.set(LIB_STORE, library.slice(0, 100));
 
@@ -637,10 +702,156 @@
     library = []; saveLibrary(); render();
   };
 
+  // ---------- Auth (Supabase, email + password) ----------
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+  });
+  const appUrl = () => location.origin + location.pathname;
+  let authMode = "login";   // login | signup | forgot
+  let currentUserId = null;
+  // Arriving from a "reset password" email link: show the new-password form, not the app.
+  let recovering = /(^|[#&?])type=recovery(&|$)/.test(location.hash + location.search);
+
+  function showView(name) {
+    for (const v of ["booting", "authView", "resetView", "appView"]) $(v).classList.toggle("hidden", v !== name);
+  }
+  function authMsg(text, ok = false, el = "authMsg") {
+    const m = $(el);
+    m.textContent = text;
+    m.className = "msg " + (ok ? "ok" : "err");
+    if (!text) m.className = "msg hidden";
+  }
+  function setAuthMode(m) {
+    authMode = m;
+    authMsg("");
+    document.querySelectorAll("#authTabs button").forEach((b) => {
+      b.classList.toggle("active", b.dataset.auth === m);
+      b.setAttribute("aria-selected", b.dataset.auth === m);
+    });
+    $("authTabs").classList.toggle("hidden", m === "forgot");
+    $("pwBlock").classList.toggle("hidden", m === "forgot");
+    $("forgotBtn").classList.toggle("hidden", m !== "login");
+    $("backToLogin").classList.toggle("hidden", m !== "forgot");
+    $("authPassword").autocomplete = m === "signup" ? "new-password" : "current-password";
+    $("authSubmit").textContent = { login: "Log in", signup: "Create account", forgot: "Send reset link" }[m];
+    $("authTitle").textContent = {
+      login: "Log in to start making music",
+      signup: "Create your free account",
+      forgot: "We'll email you a link to reset your password",
+    }[m];
+  }
+  document.querySelectorAll("#authTabs button").forEach((b) => (b.onclick = () => setAuthMode(b.dataset.auth)));
+  $("forgotBtn").onclick = () => setAuthMode("forgot");
+  $("backToLogin").onclick = () => setAuthMode("login");
+
+  const friendlyAuthError = (err) => {
+    const m = (err && err.message) || "Something went wrong. Please try again.";
+    if (/invalid login credentials/i.test(m)) return "Wrong email or password.";
+    if (/email not confirmed/i.test(m)) return "Please confirm your email first — check your inbox for the link.";
+    if (/rate limit|too many/i.test(m)) return "Too many attempts. Please wait a few minutes and try again.";
+    if (/failed to fetch|network/i.test(m)) return "Couldn't reach the login server. Check your connection.";
+    return m;
+  };
+
+  $("authForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const email = $("authEmail").value.trim();
+    const password = $("authPassword").value;
+    if (!/^\S+@\S+\.\S+$/.test(email)) return authMsg("Enter a valid email address.");
+    if (authMode !== "forgot" && password.length < 6) return authMsg("Password must be at least 6 characters.");
+    const btn = $("authSubmit"), label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Please wait…"; authMsg("");
+    try {
+      if (authMode === "login") {
+        const { error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        // onAuthStateChange takes it from here.
+      } else if (authMode === "signup") {
+        const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: appUrl() } });
+        if (error) throw error;
+        if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+          setAuthMode("login");
+          authMsg("An account with this email already exists. Log in instead.");
+        } else if (!data.session) {
+          authMsg(`Almost done! We sent a confirmation link to ${email}. Click it, then come back and log in.`, true);
+        }
+      } else {
+        const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: appUrl() });
+        if (error) throw error;
+        authMsg(`If an account exists for ${email}, a reset link is on its way.`, true);
+      }
+    } catch (err) {
+      authMsg(friendlyAuthError(err));
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
+  };
+
+  $("resetForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const password = $("newPassword").value;
+    if (password.length < 6) return authMsg("Password must be at least 6 characters.", false, "resetMsg");
+    $("resetSubmit").disabled = true;
+    try {
+      const { data, error } = await sb.auth.updateUser({ password });
+      if (error) throw error;
+      recovering = false;
+      toast("Password updated ✔");
+      startApp(data.user);
+    } catch (err) {
+      authMsg(friendlyAuthError(err), false, "resetMsg");
+    } finally {
+      $("resetSubmit").disabled = false;
+    }
+  };
+
+  $("signOutBtn").onclick = async () => {
+    await sb.auth.signOut();
+    location.replace(appUrl()); // fresh page so no state from this user lingers
+  };
+
+  function startApp(user) {
+    if (currentUserId === user.id) return showView("appView");
+    currentUserId = user.id;
+    KEY_STORE = `suno_api_key:${user.id}`;
+    LIB_STORE = `suno_library_v1:${user.id}`;
+    // One-time carry-over of anything saved before login existed.
+    for (const [legacy, scoped] of [["suno_api_key", KEY_STORE], ["suno_library_v1", LIB_STORE]]) {
+      if (store.get(scoped, null) === null && store.get(legacy, null) !== null) {
+        store.set(scoped, store.get(legacy, null));
+        store.del(legacy);
+      }
+    }
+    apiKey = store.get(KEY_STORE, "");
+    library = store.get(LIB_STORE, []);
+    $("userEmail").textContent = user.email || "";
+    $("userEmail").title = user.email || "";
+    if (/[#&](access_token|error)=/.test(location.hash)) history.replaceState(null, "", appUrl());
+    showView("appView");
+    updateCounts();
+    render();
+    if (apiKey) { refreshCredits(); resumePending(); } else { openKeyDialog(); }
+  }
+
   // ---------- Boot ----------
-  updateCounts();
-  render();
-  if (apiKey) { refreshCredits(); resumePending(); } else { openKeyDialog(); }
+  setAuthMode("login");
+  const hashErr = new URLSearchParams(location.hash.slice(1)).get("error_description");
+  sb.auth.onAuthStateChange((event, session) => {
+    if (event === "PASSWORD_RECOVERY") recovering = true;
+    if (recovering) {
+      if (session?.user) { history.replaceState(null, "", appUrl()); showView("resetView"); }
+      else if (event === "INITIAL_SESSION") { recovering = false; showView("authView"); authMsg("That reset link is invalid or has expired. Request a new one."); setAuthMode("forgot"); }
+      return;
+    }
+    if (session?.user) {
+      // Defer so we never call Supabase from inside its own auth callback.
+      setTimeout(() => startApp(session.user), 0);
+    } else if (event === "INITIAL_SESSION" || event === "SIGNED_OUT") {
+      currentUserId = null;
+      showView("authView");
+      if (hashErr) { authMsg(hashErr.replace(/\+/g, " ") + " — please try again."); history.replaceState(null, "", appUrl()); }
+    }
+  });
 })();
 </script>
 </body>
