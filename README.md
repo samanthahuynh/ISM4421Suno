@@ -8,6 +8,9 @@ Accounts (email + password) are handled by Supabase Auth.
 
 - **Email login** — sign up, log in, forgot/reset password and log out (Supabase Auth).
   The app is locked until you log in, and each account keeps its own API key and library.
+- **User profiles** — display name, unique @username, bio, favorite genres and a profile
+  photo. New users are guided through setting one up on first login; edit it anytime from
+  the profile button in the header. Favorite genres show first in Custom mode's style chips.
 - **Bring your own API key** — each user pastes their Suno API key (get one at
   [sunoapi.org/api-key](https://sunoapi.org/api-key)). It's saved only in that browser's
   localStorage and sent only to `api.sunoapi.org`.
@@ -43,6 +46,15 @@ your site's address:
 
 The Supabase project URL and publishable key are already in `public/index.html`. They're
 meant to be public; nothing secret is stored in the repo.
+
+## Database (Supabase)
+
+Already applied to the project — nothing to run. The SQL is kept in `supabase/migrations/`:
+
+- `profiles` table, one row per user, created automatically at sign-up by a trigger.
+  Row Level Security: each user can read and edit only their own profile.
+- `avatars` storage bucket (public read, images only, 2 MB max). Users can upload only
+  into their own folder (`avatars/<user id>/`).
 
 ## Run locally
 
